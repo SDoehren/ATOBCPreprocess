@@ -13,7 +13,7 @@ widest = 0
 tallest = 999
 
 
-
+first = True
 
 for i in range(len(onlyfiles)):
     im = Image.open(f'{mypath}\\{onlyfiles[i]}')
