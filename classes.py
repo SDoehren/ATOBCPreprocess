@@ -3,7 +3,6 @@ import copy
 import pandas as pd
 
 
-
 class Player:
     def __init__(self, name, role, alignment, note):
         self.name = name
@@ -19,6 +18,9 @@ class Player:
         self.abilityused = False
         self.poisoned = False
         self.roleimg = self.getroleimg()
+
+        self.deaths = []
+        self.kills = []
 
     def getplayerstate(self):
         return self.__dict__
@@ -36,41 +38,75 @@ class Player:
         else:
             ability = "unused"
         alive = "alive" if self.alive else "dead"
-        return f"{roleconverted}-{alignment}-{health}-{ability}-{alive}.png"
+
+        self.roleimg = f"static/tokenimgs/{roleconverted}-{alignment}-{health}-{ability}-{alive}.webp"
+        return self.roleimg
+
+    def rolechange(self,newrole):
+        self.currentrole = newrole
+
+        singleuseability = ['Slayer', 'Virgin', 'Assassin', 'Mastermind', 'Courtier', 'Fool', 'Professor',
+                            'Artist', 'Philosopher', 'Seamstress', 'Mezepheles', 'Damsel', 'Golem', 'Fisherman',
+                            'Huntsman', 'Pixie',  'King', 'Engineer', 'Nightwatchman',  'Bone Collector',
+                            'Judge', 'Scapegoat']
+        if newrole in singleuseability:
+            self.hasability = True
+            self.abilityused = False
+        else:
+            self.hasability = False
+            self.abilityused = False
+
+
 
 class Game:
-    def __init__(self,date,session,game,script,result,players):
+    def __init__(self, date, session, game, script, result, players):
         self.playerobjs = {}
         self.date = date
         self.session = session
         self.game = game
         self.script = script
         self.result = result
+        self.winmethod = None
         self.players = players
         self.demonbluffs = []
+        self.additionalbluffs = []
         self.storytellers = []
         self.eventdf = None
         self.votedf = None
         self.playervotedf = None
         self.events = None
 
+        self.imagesrequired = []
+
+    def __repr__(self):
+        return f"<classes.Game object - {self.session}-{self.game}>"
+
+    def gamesummary(self):
+        return [self.result,self.winmethod]
+
     def getid(self):
         return f"{self.session}-{self.game}"
 
     def addplayer(self, name, role, alignment, note):
-        p = Player(name, role, alignment,note)
+        p = Player(name, role, alignment, note)
         self.playerobjs[p.name] = p
 
     def getgamestate(self):
         d = self.__dict__
-        d['playerdata'] = {x:d['playerobjs'][x].getplayerstate() for x in d['playerobjs']}
+        d['playerdata'] = {x: d['playerobjs'][x].getplayerstate() for x in d['playerobjs']}
         d = copy.deepcopy(d)
         del d['playerobjs']
         return d
 
     def processgame(self):
-        self.votedf["voteid"] = self.votedf['gameid'].astype(str)+"-"+self.votedf['Vote Number'].astype(str)
-        self.playervotedf["voteid"] = self.playervotedf['gameid'].astype(str)+"-"+self.playervotedf['Vote Number'].astype(str)
+        for x in self.playerobjs:
+            self.playerobjs[x].rolechange(self.playerobjs[x].currentrole)
+            self.playerobjs[x].getroleimg()
+
+
+        self.votedf["voteid"] = self.votedf['gameid'].astype(str) + "-" + self.votedf['Vote Number'].astype(str)
+        self.playervotedf["voteid"] = self.playervotedf['gameid'].astype(str) + "-" + self.playervotedf[
+            'Vote Number'].astype(str)
 
         v = self.votedf.copy(deep=True)
         pv = self.playervotedf.copy(deep=True)
@@ -80,9 +116,10 @@ class Game:
         self.events = []
         for ind, r in t.iterrows():
             self.events.append(self.processevent(r, v, pv))
+        self.imagesrequired = set(self.imagesrequired)
 
     def processevent(self, row, votes, playervotes):
-        #print(row)
+        # print(row)
         actiontaker = None if pd.isnull(row["Player"]) else row["Player"]
         if actiontaker == "Legion":
             actiontakerstate = "Legion"
@@ -92,18 +129,51 @@ class Game:
             actiontakerstate = None
 
         targetlist = [x for x in row["Target"].split("|")]
-        targetstatedict = {x:self.playerobjs[x].getplayerstate() for x in targetlist if x in self.playerobjs}
+        targetstatedict = {x: self.playerobjs[x].getplayerstate() for x in targetlist if x in self.playerobjs}
 
         e = Event(row["Session"], row["Game Number"], row["index"], row["Phase"], row["Action"],
                   actiontaker, actiontakerstate, targetlist, targetstatedict, row["Note"])
         e.processevent(self.getgamestate(), votes, playervotes)
 
-        #print(getattr(e,'avsavs',None))
-        #print(setattr(e,'session',99))
+
+        d = self.getgamestate()['playerdata']
+        self.imagesrequired += [d[x]['roleimg'] for x in d]
+
+        # print(row["Session"], row["Game Number"], row["index"], row["Phase"], row["Action"], actiontaker,
+        # actiontakerstate, targetlist, targetstatedict, row["Note"])
+        self.processdelta(e.delta)
+
+        # print(getattr(e,'avsavs',None))
+        # print(setattr(e,'session',99))
+        for x in self.playerobjs:
+            self.playerobjs[x].getroleimg()
+
         return copy.deepcopy(e)
 
+    def processdelta(self, delta):
+        for d in delta:
+            player, event, action = d
+
+            if event in ['alive', 'active', 'ill','currentalignment','abilityused']:
+                setattr(self.playerobjs[player], event, action)
+            elif event == 'killed':
+                killer, method = action
+                self.playerobjs[player].deaths.append((killer, method))
+                if killer is not None:
+                    self.playerobjs[killer].kills.append((player, method))
+            elif event == 'win condition':
+                self.winmethod = action[0]
+            elif event == 'additional bluff used':
+                self.additionalbluffs.append(action)
+            elif event == 'currentrole':
+                self.playerobjs[player].rolechange(action)
+            else:
+                print(d)
+
+
 class Event:
-    def __init__(self, session, game, eventnumber, phase, eventname, player, playerstate, targetlist, targetstatedict,note):
+    def __init__(self, session, game, eventnumber, phase, eventname, player, playerstate, targetlist, targetstatedict,
+                 note):
         self.session = session
         self.game = game
         self.eventnumber = eventnumber
@@ -125,34 +195,36 @@ class Event:
         self.vote = False
         self.voteHTML = ""
 
-    def playerimagehtml(self,playerstate,size=50):
+
+
+    def playerimagehtml(self, playerstate, size=50):
         roleimg = playerstate['roleimg']
         name = playerstate['name']
         role = playerstate['currentrole']
-        return f'<img src = "{roleimg}" height = "{size}" data-bs-toggle="tooltip" data-bs-placement="bottom" title="" data-bs-original-title="{name}-{role}">'
+        return f'<img src = "{roleimg}" height = "{size}" ' \
+               f'data-bs-toggle="tooltip" data-bs-placement="bottom" title="" data-bs-original-title="{name}-{role}">'
 
-    def getroleimg(self,role,size=50):
+    def getroleimg(self, role, size=50):
         if role == "ST":
             address = "https://raw.githubusercontent.com/bra1n/townsquare/develop/src/assets/demon-head.png"
         else:
             roleconverted = role.replace("'", '').replace(' ', '').replace('-', '').lower()
-            address = f"https://raw.githubusercontent.com/bra1n/townsquare/develop/src/assets/icons/{roleconverted}.png"
+            address = f"static/tokenimgs/{roleconverted}.webp"
 
-        return f'<img src = "{address}" height = "{size}" data-bs-toggle="tooltip" data-bs-placement="bottom" title="" data-bs-original-title="{role}">'
+        return f'<img src = "{address}" height = "{size}" data-bs-toggle="tooltip" ' \
+               f'data-bs-placement="bottom" title="" data-bs-original-title="{role}">'
 
     def getplayerimg(self, size=50):
         return f"<strong>{self.player}</strong> {self.playerimagehtml(self.playerstate, size=size)}"
 
-    def gettargetpack(self,name,size=50):
+    def gettargetpack(self, name, size=50):
         targetstate = self.targetstatedict[name]
-        return f"<strong>{name}</strong> {self.playerimagehtml(targetstate,size=size)}"
+        return f"<strong>{name}</strong> {self.playerimagehtml(targetstate, size=size)}"
 
-    def processdeath(self,killer,killed,method):
+    def processdeath(self, killer, killed, method):
         for p in killed:
-            self.delta.append([p,"alive", False])
-            self.delta.append([p,"killed by", killer])
-            self.delta.append([p,"killed method", method])
-            self.delta.append([killer, "kills", p])
+            self.delta.append([p, "alive", False])
+            self.delta.append([p, "killed", (killer, method)])
             self.killed.append(p)
         self.death = True
         self.killer = killer
@@ -164,21 +236,24 @@ class Event:
         exit()
 
     def processevent(self, gamestate, votes, playervotes):
-        if self.eventname in ['Lunatic Information','Minion Information','Demon Information']:
+        if self.eventname in ['Lunatic Information', 'Minion Information', 'Demon Information']:
 
             if self.player in ['Legion']:
                 self.HTML = f"Legion learns their team as expected"
+            elif self.targetlist[0] in ['None']:
+                self.HTML = f"{self.getplayerimg()} learns nothing about their team"
             elif self.targetlist[0] in ['Standard']:
                 self.HTML = f"{self.getplayerimg()} learns their team as expected"
             elif self.targetlist[0] in ['Poppy Grower']:
                 pg = [x for x in gamestate['playerdata']
-                          if gamestate['playerdata'][x]['currentrole'] == 'Poppy Grower'][0]
+                      if gamestate['playerdata'][x]['currentrole'] == 'Poppy Grower'][0]
                 pgpack = [gamestate['playerdata'][x] for x in gamestate['playerdata']
-                              if gamestate['playerdata'][x]['currentrole'] == 'Poppy Grower'][0]
+                          if gamestate['playerdata'][x]['currentrole'] == 'Poppy Grower'][0]
                 self.HTML = f"<strong>{pg}</strong>{self.playerimagehtml(pgpack)} stops {self.getplayerimg()} learning their team"
             elif self.note in ['', 'Magician', 'Marionette']:
                 team = " ".join([self.gettargetpack(x) for x in self.targetlist])
                 self.HTML = f"{self.getplayerimg()} learns their team is {team}"
+
             else:
                 self.processmissing()
 
@@ -220,6 +295,12 @@ class Event:
             else:
                 self.processmissing()
 
+        elif self.eventname in ['Pixie Ability']:
+            if self.note in ['']:
+                self.HTML = f"{self.getplayerimg()} gains the ability of {self.getroleimg(self.targetlist[0])}"
+            else:
+                self.processmissing()
+
         elif self.eventname in ['Bounty Hunter Information']:
             if self.note in ['']:
                 self.HTML = f"{self.getplayerimg()} learns {self.getroleimg(self.targetlist[0])}"
@@ -230,9 +311,11 @@ class Event:
             slayershot = '/static/imgs/slayershot.webp'
             targetplayer = self.targetlist[0]
             if self.note == '':
-                self.HTML = f"{self.getplayerimg()} <img src = '{slayershot}' height = '50'> {self.gettargetpack(targetplayer)}"
+                self.HTML = f"{self.getplayerimg()} <img src = '{slayershot}' height = '50'> " \
+                            f"{self.gettargetpack(targetplayer)}"
             else:
-                self.HTML = f"{self.getplayerimg()} <img src = '{slayershot}' height = '50'> {self.gettargetpack(targetplayer)} ({self.note})"
+                self.HTML = f"{self.getplayerimg()} <img src = '{slayershot}' height = '50'> " \
+                            f"{self.gettargetpack(targetplayer)} ({self.note})"
             self.delta.append([self.player, "abilityused", True])
 
         elif self.eventname == 'Snitch Bluffs':
@@ -240,7 +323,7 @@ class Event:
                 bluffs = " ".join([self.getroleimg(x, size=40) for x in self.targetlist])
                 self.HTML = f"{self.getplayerimg()} receives bluffs.<br> {bluffs}"
                 for x in self.targetlist:
-                    self.delta.append(["additional bluff used", x])
+                    self.delta.append([None, "additional bluff used", x])
             else:
                 self.processmissing()
 
@@ -260,11 +343,8 @@ class Event:
                     pack = [self.gettargetpack(x) for x in self.targetlist]
                     role = "The Demon"
                 else:
-                    try:
-                        pack = [self.gettargetpack(x) for x in self.targetlist[1:]]
-                        role = self.getroleimg(self.targetlist[0])
-                    except:
-                        self.processmissing()
+                    pack = [self.gettargetpack(x) for x in self.targetlist[1:]]
+                    role = self.getroleimg(self.targetlist[0])
 
                 self.HTML = f"{self.getplayerimg()} learns {pack[0]} or {pack[1]} is {role}"
             else:
@@ -279,11 +359,12 @@ class Event:
 
         elif self.eventname in ['Grandmother Information']:
             if self.note == '':
-                self.HTML = f"{self.getplayerimg()} learns {self.gettargetpack(self.targetlist[0])} is {self.getroleimg(self.targetlist[1])}"
+                self.HTML = f"{self.getplayerimg()} learns {self.gettargetpack(self.targetlist[0])} is " \
+                            f"{self.getroleimg(self.targetlist[1])}"
             else:
                 self.processmissing()
 
-        elif self.eventname in ['Seamstress Pick', 'Fortune Teller Information','Chambermaid Choice']:
+        elif self.eventname in ['Seamstress Pick', 'Fortune Teller Information', 'Chambermaid Choice']:
             if self.note == '':
                 pack = [self.gettargetpack(x) for x in self.targetlist[:2]]
                 self.HTML = f"{self.getplayerimg()} selects {pack[0]} and {pack[1]} and learns a {self.targetlist[2]}"
@@ -308,7 +389,7 @@ class Event:
                         f"&nbsp;&nbsp;&nbsp;&nbsp;<strong>{self.note}</strong>"
 
         elif self.eventname in ['Artist Question']:
-            if self.note in ['','Poisoned']:
+            if self.note in ['', 'Poisoned']:
                 self.HTML = f"{self.getplayerimg()} visits the story teller and asks:<br>" \
                             f"&nbsp;&nbsp;&nbsp;&nbsp;<strong>{self.targetlist[0]}</strong><br>" \
                             f"They learn:<br>" \
@@ -317,15 +398,15 @@ class Event:
                 self.processmissing()
 
         elif self.eventname in ['Savant Info']:
-            if self.note in ['','Poisoned']:
+            if self.note in ['', 'Poisoned']:
                 self.HTML = f"{self.getplayerimg()} visits the story teller and learns one of the following is true:<br>" \
                             f"&nbsp;&nbsp;<strong> {self.targetlist[0]}</strong><br>" \
                             f"&nbsp;&nbsp;<strong> {self.targetlist[1]}</strong>"
             else:
                 self.processmissing()
 
-        elif self.eventname in ['General Information']:
-            if self.note in ['','Poisoned']:
+        elif self.eventname in ['General Information', 'Fisherman Information', 'Balloonist Information']:
+            if self.note in ['', 'Poisoned']:
                 self.HTML = f"{self.getplayerimg()} learns <strong> {self.targetlist[0]}</strong>"
             else:
                 self.processmissing()
@@ -336,12 +417,14 @@ class Event:
                         f"&nbsp;&nbsp;{self.player} picks <strong>{selections[0]}</strong><br>" \
                         f"&nbsp;&nbsp;{self.targetlist[0]} picks <strong>{selections[1]}</strong>"
 
-        elif self.eventname in ['Juggle','Gambler Choice']:
+        elif self.eventname in ['Juggle', 'Gambler Choice']:
             if self.note in ['']:
                 if self.eventname == 'Juggle':
                     verb = "juggles"
                 elif self.eventname == 'Gambler Choice':
                     verb = "gambles"
+                else:
+                    verb = "Something done fucked, see line 350ish"
 
                 self.HTML = f"{self.getplayerimg()} {verb} " \
                             f"{self.gettargetpack(self.targetlist[0])} " \
@@ -367,8 +450,8 @@ class Event:
             else:
                 self.processmissing()
 
-        elif self.eventname in ['Oracle Number','Chef Number','Mathematician Number','Empath Number',
-                                'Clockmaker Number','Juggler Information','Flowergirl Information',
+        elif self.eventname in ['Oracle Number', 'Chef Number', 'Mathematician Number', 'Empath Number',
+                                'Clockmaker Number', 'Juggler Information', 'Flowergirl Information',
                                 'Town Crier Information']:
             if self.note == '':
                 self.HTML = f"{self.getplayerimg()} learns a <strong>{self.targetlist[0]}</strong>"
@@ -411,22 +494,23 @@ class Event:
             else:
                 self.processmissing()
 
-        elif self.eventname in ['Witch Pick', 'Picks Master', 'Poisoner Pick', 'Snake Charmer Pick','Drinking Buddy',
+        elif self.eventname in ['Witch Pick', 'Picks Master', 'Poisoner Pick', 'Snake Charmer Pick', 'Drinking Buddy',
                                 'DA Protection', 'Klutz Pick', 'Lunatic Pick', 'Exorcist Pick', 'Lycanthrope Pick',
-                                'Nightwatchman Pick']:
+                                'Nightwatchman Pick','Huntsman Pick']:
             if self.note == '':
                 pack = " ".join([self.gettargetpack(x) for x in self.targetlist])
-                verb = {'Witch Pick':'curses',
-                        'Picks Master':'picks there master as',
-                        'Poisoner Pick':'attempts to poison',
-                        'Snake Charmer Pick':'attempts to snake charm',
-                        'Drinking Buddy':'chooses their drinking buddy as',
-                        'DA Protection':'DA protects',
-                        'Klutz Pick':'chooses their drinking buddy as',
-                        'Lunatic Pick':'makes their "demon" pick and selects',
-                        'Exorcist Pick':'tries to excise',
-                        'Lycanthrope Pick':'tries to turn',
-                        'Nightwatchman Pick':'reveals themselves to'}
+                verb = {'Witch Pick': 'curses',
+                        'Picks Master': 'picks there master as',
+                        'Poisoner Pick': 'attempts to poison',
+                        'Snake Charmer Pick': 'attempts to snake charm',
+                        'Drinking Buddy': 'chooses their drinking buddy as',
+                        'DA Protection': 'DA protects',
+                        'Klutz Pick': 'chooses their drinking buddy as',
+                        'Lunatic Pick': 'makes their "demon" pick and selects',
+                        'Exorcist Pick': 'tries to excise',
+                        'Lycanthrope Pick': 'tries to turn',
+                        'Nightwatchman Pick': 'reveals themselves to',
+                        'Huntsman Pick': 'hopes their Damsel is'}
                 self.HTML = f"{self.getplayerimg()} {verb[self.eventname]} " \
                             f"{pack}"
             else:
@@ -487,8 +571,8 @@ class Event:
             else:
                 self.processmissing()
 
-        elif self.eventname in ['Pukka Poison','Widow Poison']:
-            verbs = {'Pukka Poison':'Pukka Poisoned','Widow Poison':'Widow Poisoned'}
+        elif self.eventname in ['Pukka Poison', 'Widow Poison']:
+            verbs = {'Pukka Poison': 'Pukka Poisoned', 'Widow Poison': 'Widow Poisoned'}
 
             if self.note == '':
                 self.HTML = f"{self.getplayerimg()} {verbs[self.eventname]} {self.gettargetpack(self.targetlist[0])}"
@@ -498,7 +582,7 @@ class Event:
             else:
                 self.processmissing()
 
-        elif self.eventname in ['Poisoned','Drunked','Philosopher Drunk','Snake Charm Poison','Goon Drunk',
+        elif self.eventname in ['Poisoned', 'Drunked', 'Philosopher Drunk', 'Snake Charm Poison', 'Goon Drunk',
                                 'Innkeeper Drunk']:
             if self.eventname == 'Snake Charm Poison':
                 self.eventname = 'Snake Charm Poisoned'
@@ -507,7 +591,7 @@ class Event:
 
             if self.note == '':
                 self.HTML = f"{self.getplayerimg()} became {self.eventname}"
-                self.delta.append([self.targetlist[0], "ill", True])
+                self.delta.append([self.player, "ill", True])
             elif self.note == 'Drunk':
                 self.HTML = f"{self.getplayerimg()} did not became {self.eventname}"
             else:
@@ -516,7 +600,7 @@ class Event:
         elif self.eventname == 'Healthy':
             if self.note == '':
                 self.HTML = f"{self.getplayerimg()} became Healthy"
-                self.delta.append([self.targetlist[0], "ill", False])
+                self.delta.append([self.player, "ill", False])
             else:
                 self.processmissing()
 
@@ -528,6 +612,10 @@ class Event:
                 self.processmissing()
 
         elif self.eventname == 'Alignment Change':
+            if self.targetlist[0] == "":
+                CA = self.playerstate['currentalignment']
+                self.targetlist[0] = "Evil" if CA == 'Good' else "Good"
+
             if self.note == '':
                 self.HTML = f"{self.getplayerimg()} had their alignment changed to {self.getroleimg(self.targetlist[0])}"
                 self.delta.append([self.player, "currentalignment", self.targetlist[0]])
@@ -544,6 +632,12 @@ class Event:
         elif self.eventname == 'Po Charge':
             if self.note == '':
                 self.HTML = f"{self.getplayerimg()} charges up"
+            else:
+                self.processmissing()
+
+        elif self.eventname == 'Bureaucrat Ability':
+            if self.note == '':
+                self.HTML = f"{self.getplayerimg()} gives 3 votes to {self.gettargetpack(self.targetlist[0])}"
             else:
                 self.processmissing()
 
@@ -564,9 +658,9 @@ class Event:
                 self.processdeath(self.player, [self.player], 'Failed Gamble')
             elif self.note == 'Gunslinger':
                 gunslinger = [x for x in gamestate['playerdata']
-                          if gamestate['playerdata'][x]['currentrole'] == 'Gunslinger'][0]
-                gunslingerpack = [gamestate['playerdata'][x] for x in gamestate['playerdata']
                               if gamestate['playerdata'][x]['currentrole'] == 'Gunslinger'][0]
+                gunslingerpack = [gamestate['playerdata'][x] for x in gamestate['playerdata']
+                                  if gamestate['playerdata'][x]['currentrole'] == 'Gunslinger'][0]
                 self.HTML = f"{self.getplayerimg()} is targeted by {self.playerimagehtml(gunslingerpack)}"
                 self.processdeath(gunslinger, [self.player], 'Gunslinger Kill')
             else:
@@ -610,7 +704,7 @@ class Event:
         elif self.eventname == 'Tinker Kill':
             if self.note == '':
                 self.HTML = f"{self.getplayerimg()} spontaneously dies"
-                self.processdeath(None, [self.targetlist[0]], 'Tinker Kill')
+                self.processdeath(None, [self.player], 'Tinker Kill')
             else:
                 self.processmissing()
 
@@ -628,13 +722,13 @@ class Event:
                 gossip = [x for x in gamestate['playerdata']
                           if gamestate['playerdata'][x]['currentrole'] == 'Gossip'][0]
                 gossippack = [gamestate['playerdata'][x] for x in gamestate['playerdata']
-                          if gamestate['playerdata'][x]['currentrole'] == 'Gossip'][0]
+                              if gamestate['playerdata'][x]['currentrole'] == 'Gossip'][0]
                 self.HTML = f"{self.getplayerimg()} dies to the {self.playerimagehtml(gossippack)}"
                 self.processdeath(gossip, [self.player], 'Gossip Kill')
             else:
                 self.processmissing()
 
-        elif self.eventname in ['Boomdandy Slaughter','Boomdandy Vote Kill']:
+        elif self.eventname in ['Boomdandy Slaughter', 'Boomdandy Vote Kill']:
             boomdandykill = '/static/imgs/boomdandykill.webp'
             if self.note == '':
                 self.HTML = f"<img src = '{boomdandykill}' height = '75'>{self.gettargetpack(self.targetlist[0])} gets caught in the explosion"
@@ -646,15 +740,17 @@ class Event:
             if self.note == '':
                 self.HTML = f"{self.getplayerimg()} was Exiled"
                 self.processdeath(None, [self.player], 'Exiled')
+            elif self.note == 'Protected':
+                self.HTML = f"{self.getplayerimg()} was Exiled (Protected)"
             else:
                 self.processmissing()
 
         elif self.eventname == 'Witch Kill':
             if self.note == '':
                 witch = [x for x in gamestate['playerdata']
-                          if gamestate['playerdata'][x]['currentrole'] == 'Witch'][0]
+                         if gamestate['playerdata'][x]['currentrole'] == 'Witch'][0]
                 witchpack = [gamestate['playerdata'][x] for x in gamestate['playerdata']
-                          if gamestate['playerdata'][x]['currentrole'] == 'Witch'][0]
+                             if gamestate['playerdata'][x]['currentrole'] == 'Witch'][0]
                 self.HTML = f"{self.getplayerimg()} dies to the {self.playerimagehtml(witchpack)}"
                 self.processdeath(witch, [self.player], 'Witch Kill')
             else:
@@ -662,30 +758,59 @@ class Event:
 
         elif self.eventname == 'Nomination':
             clockhand = '/static/imgs/clock.webp'
+            clockblock = '/static/imgs/clockblock.webp'
             targetplayerpack = self.getroleimg(self.targetlist[0])
 
             if self.note != 'No Vote':
-                print("FINISH SORTING REPORTING OF THE VOTE!")
                 voteid = f"{self.session}-{self.game}-{str(self.note)[1:]}"
-                #print(voteid)
-                #print([x for x in votes.to_dict("records") if x['voteid'] == voteid][0])
-                #print({x['Player']:x['Voted'] for x in playervotes.to_dict("records") if x['voteid'] == voteid})
-                #votes, playervotes
-                self.HTML = f"{self.getplayerimg()} <img src = '{clockhand}' height = '30'> {targetplayerpack}"
+                votedetails = [x for x in votes.to_dict("records") if x['voteid'] == voteid][0]
+                voterpack = [x for x in playervotes.to_dict("records") if x['voteid'] == voteid]
+                livingvotes = len([x for x in voterpack if not x['Dead']])
+                deadvotes = len([x for x in voterpack if x['Dead'] and not x['Dead Vote Used']])
+                usedeadvotes = len([x for x in voterpack if x['Dead'] and x['Dead Vote Used']])
+
+                votesreceived = votedetails['Total Votes']
+                skull = '<svg height="30" aria-hidden="true" focusable="false" data-prefix="fas" data-icon="skull" role="img" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" class="svg-inline--fa fa-skull fa-w-16"><path fill="currentColor" d="M256 0C114.6 0 0 100.3 0 224c0 70.1 36.9 132.6 94.5 173.7 9.6 6.9 15.2 18.1 13.5 29.9l-9.4 66.2c-1.4 9.6 6 18.2 15.7 18.2H192v-56c0-4.4 3.6-8 8-8h16c4.4 0 8 3.6 8 8v56h64v-56c0-4.4 3.6-8 8-8h16c4.4 0 8 3.6 8 8v56h77.7c9.7 0 17.1-8.6 15.7-18.2l-9.4-66.2c-1.7-11.7 3.8-23 13.5-29.9C475.1 356.6 512 294.1 512 224 512 100.3 397.4 0 256 0zm-96 320c-35.3 0-64-28.7-64-64s28.7-64 64-64 64 28.7 64 64-28.7 64-64 64zm192 0c-35.3 0-64-28.7-64-64s28.7-64 64-64 64 28.7 64 64-28.7 64-64 64z" class=""></path></svg>'
+                deathmarker = skull if votedetails['On the Block'] == 1 else ""
+
+                self.HTML = f"{self.getplayerimg()} <img src = '{clockhand}' height = '30'> {targetplayerpack}<br>" \
+                            f"Living Votes Available:{livingvotes}<br>" \
+                            f"Dead Votes Available:{deadvotes}<br>" \
+                            f"Dead Votes Used:{usedeadvotes}<br>" \
+                            f"VotesReceived:{votesreceived}{deathmarker}"
             elif self.note == 'No Vote':
-                self.HTML = f"{self.getplayerimg()} <img src = '{clockhand}' height = '30'> {targetplayerpack}"
+                self.HTML = f"{self.getplayerimg()} <img src = '{clockblock}' height = '30'> {targetplayerpack}"
             else:
                 self.processmissing()
 
         elif self.eventname == 'Boomdandy Vote':
             if self.note != 'No Vote':
-                print("FINSIH SORTING REPORTING OF THE VOTE!")
+                print("FINSIH SORTING REPORTING OF THE Boomdandy Vote!")
                 voteid = f"{self.session}-{self.game}-{str(self.note)[1:]}"
-                #print(voteid)
-                #print([x for x in votes.to_dict("records") if x['voteid'] == voteid][0])
-                #print({x['Player']:x['Voted'] for x in playervotes.to_dict("records") if x['voteid'] == voteid})
-                #votes, playervotes
+                # print(voteid)
+                # print([x for x in votes.to_dict("records") if x['voteid'] == voteid][0])
+                # print({x['Player']:x['Voted'] for x in playervotes.to_dict("records") if x['voteid'] == voteid})
+                # votes, playervotes
                 self.HTML = f"FINISH SORTING REPORTING OF THE Boomdandy Vote"
+            else:
+                self.processmissing()
+
+        elif self.eventname == 'Forms a Cult':
+            if self.note != 'No Vote':
+                print("FINSIH SORTING REPORTING OF THE Forms a Cult Vote!")
+                voteid = f"{self.session}-{self.game}-{str(self.note)[1:]}"
+                # print(voteid)
+                # print([x for x in votes.to_dict("records") if x['voteid'] == voteid][0])
+                # print({x['Player']:x['Voted'] for x in playervotes.to_dict("records") if x['voteid'] == voteid})
+                # votes, playervotes
+                self.HTML = f"FINISH SORTING REPORTING OF THE Forms a Cult Vote"
+            else:
+                self.processmissing()
+
+        elif self.eventname == "Holds Lil' Monsta":
+            if self.note == '':
+                LM = "Lil' Monsta"
+                self.HTML = f"{self.getplayerimg()} grabs {self.getroleimg(LM)}"
             else:
                 self.processmissing()
 
@@ -702,14 +827,18 @@ class Event:
                 self.HTML = f"<img src = '{execute}' height = '60'> {self.getplayerimg()} was double tapped"
             elif self.note == "Judge":
                 judge = [x for x in gamestate['playerdata']
-                          if gamestate['playerdata'][x]['currentrole'] == 'Judge'][0]
+                         if gamestate['playerdata'][x]['currentrole'] == 'Judge'][0]
                 judgepack = [gamestate['playerdata'][x] for x in gamestate['playerdata']
-                              if gamestate['playerdata'][x]['currentrole'] == 'Judge'][0]
+                             if gamestate['playerdata'][x]['currentrole'] == 'Judge'][0]
                 self.HTML = f"<img src = '{executejudge}' height = '60'> {self.getplayerimg()} was executed by" \
                             f"{self.playerimagehtml(judgepack)}"
                 self.processdeath(judge, [self.player], 'Judge Executed')
             elif self.note == "Scarlet Pass":
                 self.HTML = f"<img src = '{execute}' height = '60'> {self.getplayerimg()} was executed ({self.getroleimg('scarletwoman')}triggered)"
+            elif self.note == "Mastermind":
+                self.HTML = f"<img src = '{execute}' height = '60'> {self.getplayerimg()} was executed ({self.getroleimg('Mastermind')}triggered)"
+            elif self.note == "Mutant":
+                self.HTML = f"<img src = '{execute}' height = '60'> {self.getplayerimg()} was executed as the {self.getroleimg('Mutant')}"
             else:
                 self.processmissing()
 
@@ -723,17 +852,20 @@ class Event:
                             f"scaleX(-1);' src = '{demonattack}' height = '50'> <strong>STAR PASS</strong>"
             elif self.note == "Legion":
                 self.HTML = f"{self.getroleimg('Legion', size=50)} <img src = '{demonattack}' height = '50'> " \
-                       f"{targetplayerpack}"
+                            f"{targetplayerpack}"
             elif self.note == "Scarlet Pass":
                 self.HTML = f"{self.getplayerimg()} <img style='-webkit-transform: scaleX(-1); transform: " \
                             f"scaleX(-1);' src = '{demonattack}' height = '50'> " \
                             f"{self.getroleimg('scarletwoman', size=40)} triggered"
+            elif self.note == "Lil' Monsta":
+                LM = "Lil' Monsta"
+                self.HTML = f"{self.getroleimg(LM)} <img src = '{demonattack}' height = '50'> {targetplayerpack}"
             elif self.note != "":
                 self.HTML = f"{self.getplayerimg()} <img src = '{demonattackblock}' height = '50'> " \
-                       f"{targetplayerpack} {self.note}"
+                            f"{targetplayerpack} {self.note}"
             else:
                 self.HTML = f"{self.getplayerimg()} <img src = '{demonattack}' height = '50'> {targetplayerpack}"
-            self.processdeath(self.player,[self.targetlist[0]],'Demon Kill')
+            self.processdeath(self.player, [self.targetlist[0]], 'Demon Kill')
 
         elif self.eventname == 'Shabaloth Resurrect':
             p = self.targetlist[0]
@@ -741,10 +873,17 @@ class Event:
             self.HTML = f"{self.getplayerimg()} resurrects {targetplayerpack}"
             self.delta.append([p, "alive", True])
 
+        elif self.eventname == 'Inactive':
+            self.HTML = ""
+            self.delta.append([self.player, "active", False])
+
         elif self.eventname == 'Player Left Game':
             self.HTML = f"{self.getplayerimg()} left the game"
-            self.delta.append([self.targetlist[0], "active", False])
+            self.delta.append([self.player, "active", False])
 
+        elif self.eventname == 'Player Joined Game':
+            self.HTML = f"{self.getplayerimg()} finally turned up"
+            self.delta.append([self.player, "active", True])
 
         elif self.eventname == 'Game End':
             winner = None
@@ -757,7 +896,6 @@ class Event:
             elif self.note == 'Slayer Kill':
                 winner, method = "Good", "The Slayer got the Demon"
 
-
             elif self.note == 'Saint Executed':
                 winner, method = "Evil", "The Saint was Executed"
             elif self.note == 'Two Living Players':
@@ -767,7 +905,8 @@ class Event:
 
             elif self.note == 'Mastermind Execution':
                 winner, method = self.targetlist[0], "Mastermind Triggered"
-
+            elif self.note == 'Cult Formed':
+                winner, method = self.targetlist[0], f"A {self.targetlist[0]} Cult Was Formed"
 
             if winner is None or method is None:
                 self.processmissing()
@@ -779,7 +918,7 @@ class Event:
                 else:
                     self.HTML = f'<h1>Game End - <span style="color: {colour}">{winner} Win</span>' \
                                 f'</h1><h4>{method}</h4><img src = "{img}" width = "100%">'
-                self.delta.append(["gamestate","Complete"])
+                self.delta.append([None, "win condition", (self.note, winner)])
 
 
         else:
