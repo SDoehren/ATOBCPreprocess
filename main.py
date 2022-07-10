@@ -1,8 +1,6 @@
 import CharacterJSONprocess
 import initimport
 import classes as C
-import awards
-import playerstats
 
 SessionsMain, RolesMain, EventsMain, VotesMain, PlayerVotesMain = initimport.importxlsx()
 RoleTypesdf = CharacterJSONprocess.getrolesdf()
@@ -39,7 +37,7 @@ for ind, r in SessionsMain.iterrows():
 
     g.processgame()
 
-    games[(g.session,g.game)]=g
+    games[f"{g.session}-{g.game}"]=g
 
     #print(g.getgamestate())
     #exit()
@@ -58,13 +56,46 @@ from os.path import isfile, join
 mypath2 = r'D:\PyCharm/BOTCwebsite2/app\static/tokenimgs'
 made = [f.split(".")[0] for f in listdir(mypath2) if isfile(join(mypath2, f))]
 for i in imgrequired:
-    print(i)
-    createimgs.imageondemand(i)
+    if i.split(".")[-2].split("/")[-1] not in made:
+        createimgs.imageondemand(i)
 
-playerpack = playerstats.PlayerFactory(games)
-awardspack = awards.getallawards(games)
 
 import pickle
+from awards import awardpackgen
+awards = awardpackgen(games)
+print(awards)
+pickle.dump(games, open(r'games.p',"wb"))
+
+
 #D:\PyCharm\BOTCwebsite2
-datapack = [games]
+targetings = []
+exportgames = {}
+gamessummary = {}
+for g in games:
+    gamedict = games[g].gamejson()
+    gamessummary[g] = {x:gamedict[x] for x in ['playerorder', 'date', 'session', 'game', 'script', 'result',
+                                               'winmethod', 'players', 'storytellers', 'allrolesused']
+    }
+
+    del gamedict['playerobjs']
+    del gamedict['eventdf']
+    del gamedict['playervotedf']
+    del gamedict['votedf']
+    del gamedict['imagesrequired']
+
+    gamedict['events'] = [x.__dict__ for x in gamedict['events']]
+
+    gamedict['phases'] = {}
+
+    for e in gamedict['events']:
+        if e['phase'] not in gamedict['phases']:
+            gamedict['phases'][e['phase']] = []
+        gamedict['phases'][e['phase']].append(e)
+
+    exportgames[g] = gamedict
+
+
+
+datapack = [exportgames,gamessummary,awards]
 pickle.dump(datapack, open(r'D:\PyCharm\BOTCwebsite2\datapack.p',"wb"))
+print("--END--")

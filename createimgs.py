@@ -7,8 +7,10 @@ import itertools
 
 
 def imageondemand(targetfile):
+    targetfile = targetfile[63:]
+    print(targetfile)
     data = targetfile.split("/")[-1].split(".")[0].split("-")
-    role,align,health,ability,alive = data
+    role,align,health,ability,alive,active = data
 
     mypath = r"D:\GitHub\townsquare\src\assets\icons"
     im = Image.open(f'{mypath}\\{role}.png')
@@ -60,6 +62,12 @@ def imageondemand(targetfile):
         sqimage.paste(im, (hpos, vpos), im)
 
     sqimage = sqimage.resize((200, 200), Image.ANTIALIAS)
+    if active == "inactive":
+        im2 = sqimage.copy()
+        im2.putalpha(127)
+        sqimage.paste(im2, sqimage)
+        sqimage.paste(sqimage, (0, 0), sqimage)
+
 
     fold = r'D:\PyCharm\BOTCwebsite2\app'
     filename = f"{fold}/{targetfile}"
