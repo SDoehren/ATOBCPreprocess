@@ -5,12 +5,13 @@ import classes as C
 SessionsMain, RolesMain, EventsMain, VotesMain, PlayerVotesMain = initimport.importxlsx()
 RoleTypesdf = CharacterJSONprocess.getrolesdf()
 
-RoleTypesdict = RoleTypesdf.to_dict("records")
-RoleTypesdict = {x['Role']:x['Side'] for x in RoleTypesdict}
+RoleTypesdfdict = RoleTypesdf.to_dict("records")
+RoleSidedict = {x['Role']:x['Side'] for x in RoleTypesdfdict}
+RoleTypesdict = {x['Role']:x['Type'] for x in RoleTypesdfdict}
+
 
 games = {}
 for ind, r in SessionsMain.iterrows():
-
     g = C.Game(r.Date,r.Session,r["Game Number"],r.Script,r.Result,r.PlayerCount)
 
     es = EventsMain.copy(deep=True)
@@ -31,9 +32,9 @@ for ind, r in SessionsMain.iterrows():
         elif p['Player'] == "Bluff":
             g.demonbluffs.append(p["Role"])
         elif p['Notes'] in ["Good","Evil"]:
-            g.addplayer(p["Player"], p['Role'], p['Notes'], p['Notes'])
+            g.addplayer(p["Player"], p['Role'], p['Notes'], p['Notes'], RoleTypesdict[p['Role']])
         else:
-            g.addplayer(p["Player"], p['Role'], RoleTypesdict[p['Role']], p['Notes'])
+            g.addplayer(p["Player"], p['Role'], RoleSidedict[p['Role']], p['Notes'], RoleTypesdict[p['Role']])
 
     g.processgame()
 
@@ -59,12 +60,20 @@ for i in imgrequired:
     if i.split(".")[-2].split("/")[-1] not in made:
         createimgs.imageondemand(i)
 
-
 import pickle
-from awards import awardpackgen
-awards = awardpackgen(games)
-print(awards)
 pickle.dump(games, open(r'games.p',"wb"))
+
+
+from playertable import gettabledata
+playertable,eligible = gettabledata(games)
+#print(awards)
+
+from awards import awardpackgen
+awards = awardpackgen(games,eligible)
+#print(awards)
+
+
+
 
 
 #D:\PyCharm\BOTCwebsite2
@@ -74,7 +83,7 @@ gamessummary = {}
 for g in games:
     gamedict = games[g].gamejson()
     gamessummary[g] = {x:gamedict[x] for x in ['playerorder', 'date', 'session', 'game', 'script', 'result',
-                                               'winmethod', 'players', 'storytellers', 'allrolesused']
+                                               'winmethod', 'players','setupstr', 'storytellers', 'allrolesused']
     }
 
     del gamedict['playerobjs']
@@ -96,6 +105,6 @@ for g in games:
 
 
 
-datapack = [exportgames,gamessummary,awards]
+datapack = [exportgames,gamessummary,awards,playertable]
 pickle.dump(datapack, open(r'D:\PyCharm\BOTCwebsite2\datapack.p',"wb"))
 print("--END--")

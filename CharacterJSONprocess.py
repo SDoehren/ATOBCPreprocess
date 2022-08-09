@@ -196,8 +196,48 @@ rolesingleuse = {"ST": False,
                  }
 
 if __name__ == '__main__':
-    df = getrolesdf()
-    r = list(df.loc[df["Type"] == "Demon"]["Role"])
-    r.sort()
-    for x in r:
+    with open('roles2.json') as f:
+        d = json.load(f)
+
+    pack = []
+
+    for x in d:
+
+        position = None
+        if "start knowing" in x["ability"]:
+            position = 0
+        elif "starts knowing" in x["ability"]:
+            position = 0
+        elif "Each night" in x["ability"]:
+            position = 1
+        elif "Each night" in x["ability"]:
+            position = 2
+        elif "Each day" in x["ability"]:
+            position = 3
+        elif "Once per game" in x["ability"] and "at night" in x["ability"].lower():
+            position = 4
+        elif "Once per game" in x["ability"] and "during the day" in x["ability"].lower():
+            position = 5
+        elif "Once per game" in x["ability"]:
+            position = 6
+        else:
+            position = 7
+
+        pack.append([x['name'], x['ability'],position,len(x["ability"])])
+
+    pack.sort(key=lambda x: x[3])
+    pack.sort(key=lambda x:x[2])
+
+    for x in pack:
         print(x)
+
+    """
+    ^Within each catergory of characters, we ask that you sort them as follows, unless you have a compelling reason not to:
+-Any character whose ability contains the phrase "start(s) knowing"
+-Any character whose ability contains the phrase "Each night"
+-Any character whose ability contains the phrase "Each night*"
+-Any character whose ability contains the phrase "Each day"
+-Any character whose ability contains the phrase "Once per game", with characters that act during the night before characters that act during the day
+-Any character whose ability acts upon some trigger
+-All other characters
+"""

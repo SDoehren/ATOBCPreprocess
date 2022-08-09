@@ -1,16 +1,23 @@
 import copy
 import pandas as pd
 from collections import Counter as cnt
+import CharacterJSONprocess
+RoleTypesdf = CharacterJSONprocess.getrolesdf()
+RoleTypesdfdict = RoleTypesdf.to_dict("records")
+RoleSidedict = {x['Role']:x['Side'] for x in RoleTypesdfdict}
+RoleTypesdict = {x['Role']:x['Type'] for x in RoleTypesdfdict}
 
 class Player:
-    def __init__(self, name, role, alignment, note):
+    def __init__(self, name, role, alignment, note, type):
         self.name = name
         self.active = True
         self.startingrole = role
         self.rolenote = note
         self.currentrole = role
         self.startingalignment = alignment
+        self.startingtype = type
         self.currentalignment = alignment
+        self.currenttype = type
         self.alive = True
         self.deadvoteused = False
         self.hasability = False
@@ -19,6 +26,7 @@ class Player:
         self.startingroleimg = None
         self.roleimg = None
         self.win = None
+
 
         self.deaths = []
         self.kills = []
@@ -46,16 +54,16 @@ class Player:
 
         inactive = "active" if self.active else "inactive"
 
-
         self.roleimg = f"https://raw.githubusercontent.com/SDoehren/AFBOTCSite/main/app/static/tokenimgs/{roleconverted}-{alignment}-{health}-{ability}-{alive}-{inactive}.webp"
         return self.roleimg
 
-    def rolechange(self,newrole):
+    def rolechange(self, newrole):
         self.currentrole = newrole
+        self.startingtype = RoleTypesdict[newrole]
 
         singleuseability = ['Slayer', 'Virgin', 'Assassin', 'Mastermind', 'Courtier', 'Fool', 'Professor',
                             'Artist', 'Philosopher', 'Seamstress', 'Mezepheles', 'Damsel', 'Golem', 'Fisherman',
-                            'Huntsman', 'Pixie',  'King', 'Engineer', 'Nightwatchman',  'Bone Collector',
+                            'Huntsman', 'Pixie', 'King', 'Engineer', 'Nightwatchman', 'Bone Collector',
                             'Judge', 'Scapegoat']
         if newrole in singleuseability:
             self.hasability = True
@@ -65,6 +73,7 @@ class Player:
             self.abilityused = False
 
         self.getroleimg()
+
 
 class Game:
     def __init__(self, date, session, game, script, result, players):
@@ -84,14 +93,13 @@ class Game:
         self.votedf = None
         self.playervotedf = None
         self.events = None
+        self.setup = {"Townsfolk": 0, "Outsider": 0, "Minion": 0, "Demon": 0, "Travellers": 0}
+        self.setupstr = ""
 
         self.startofphasestate = {}
-
         self.imagesrequired = []
 
         self.allrolesused = []
-
-
 
     def __repr__(self):
         return f"<classes.Game object - {self.session}-{self.game}>"
@@ -100,13 +108,19 @@ class Game:
         return self.__dict__
 
     def gamesummary(self):
-        return [self.result,self.winmethod]
+        return [self.result, self.winmethod]
 
     def getid(self):
         return f"{self.session}-{self.game}"
 
-    def addplayer(self, name, role, alignment, note):
-        p = Player(name, role, alignment, note)
+    def addplayer(self, name, role, alignment, note, type):
+        p = Player(name, role, alignment, note, type)
+        self.setup[type] +=1
+
+        if self.setup["Travellers"]>0:
+            self.setupstr = f'{self.setup["Townsfolk"]}-{self.setup["Outsider"]}-{self.setup["Minion"]}-{self.setup["Demon"]} ({self.setup["Travellers"]})'
+        else:
+            self.setupstr = f'{self.setup["Townsfolk"]}-{self.setup["Outsider"]}-{self.setup["Minion"]}-{self.setup["Demon"]}'
         self.playerorder.append(name)
         self.playerobjs[p.name] = p
 
@@ -121,7 +135,6 @@ class Game:
         print(f"{self.session}-{self.game}")
         for x in self.playerobjs:
             self.playerobjs[x].startcommand()
-
 
         self.votedf["voteid"] = self.votedf['gameid'].astype(str) + "-" + self.votedf['Vote Number'].astype(str)
         self.playervotedf["voteid"] = self.playervotedf['gameid'].astype(str) + "-" + self.playervotedf[
@@ -139,9 +152,12 @@ class Game:
 
     def processevent(self, row, votes, playervotes):
         # print(row)
+        #print(f'{row["Session"]}-{row["Game Number"]}-{row["Phase"]}')
         actiontaker = None if pd.isnull(row["Player"]) else row["Player"]
         if actiontaker == "Legion":
             actiontakerstate = "Legion"
+        elif actiontaker == 'Storyteller':
+            actiontakerstate = 'Storyteller'
         elif actiontaker is not None:
             actiontakerstate = self.playerobjs[actiontaker].getplayerstate()
         else:
@@ -154,16 +170,17 @@ class Game:
             imgs = []
             for x in self.playerobjs:
                 obj = self.playerobjs[x]
-                imgs.append([obj.name,obj.currentrole,obj.roleimg])
+                imgs.append([obj.name, obj.currentrole, obj.roleimg])
                 if obj.currentrole not in self.allrolesused:
                     self.allrolesused.append(obj.currentrole)
 
             self.startofphasestate[row["Phase"]] = imgs
 
+        gamestate = self.getgamestate()
+        playerpack = gamestate['playerdata']
         e = Event(row["Session"], row["Game Number"], row["index"], row["Phase"], row["Action"],
-                  actiontaker, actiontakerstate, targetlist, targetstatedict, row["Note"])
-        e.processevent(self.getgamestate(), votes, playervotes)
-
+                  actiontaker, actiontakerstate, targetlist, targetstatedict, row["Note"], playerpack)
+        e.processevent(gamestate, votes, playervotes)
 
         d = self.getgamestate()['playerdata']
         self.imagesrequired += [d[x]['roleimg'] for x in d]
@@ -179,14 +196,14 @@ class Game:
             if self.playerobjs[x].currentrole not in self.allrolesused:
                 self.allrolesused.append(self.playerobjs[x].currentrole)
 
-
-
         return copy.deepcopy(e)
 
     def processdelta(self, delta):
         for d in delta:
             player, event, action = d
-            if event in ['alive', 'active', 'poisoned','currentalignment','abilityused']:
+            if player == 'Storyteller':
+                continue
+            if event in ['alive', 'active', 'poisoned', 'currentalignment', 'abilityused']:
                 setattr(self.playerobjs[player], event, action)
             elif event == 'killed':
                 killer, method = action
@@ -204,9 +221,10 @@ class Game:
             else:
                 print(d)
 
+
 class Event:
     def __init__(self, session, game, eventnumber, phase, eventname, player, playerstate, targetlist, targetstatedict,
-                 note):
+                 note,playerpack):
         self.session = session
         self.game = game
         self.eventnumber = eventnumber
@@ -218,6 +236,7 @@ class Event:
         self.targetlist = targetlist
         self.targetstatedict = targetstatedict
         self.delta = []
+        self.playerpack = playerpack
         self.HTML = f"UNPROCESSED - {session}-{game}-{eventnumber} {phase} {player} {eventname} {'|'.join(targetlist)} {note}"
 
         self.death = False
@@ -230,7 +249,6 @@ class Event:
 
         self.nomination = []
         self.voterpack = []
-
 
     def playerimagehtml(self, playerstate, size=50):
         roleimg = playerstate['roleimg']
@@ -250,9 +268,21 @@ class Event:
                f'data-bs-placement="bottom" title="" data-bs-original-title="{role}">'
 
     def getplayerimg(self, size=50):
+        if self.player == "Storyteller":
+            address = "https://raw.githubusercontent.com/bra1n/townsquare/develop/src/assets/demon-head.png"
+            img = f'<img src = "{address}" height = "{size}" data-bs-toggle="tooltip" ' \
+                  f'data-bs-placement="bottom" title="" data-bs-original-title="Storyteller">'
+            return f"<strong>Storyteller</strong> {img}"
+
         return f"<strong>{self.player}</strong> {self.playerimagehtml(self.playerstate, size=size)}"
 
     def gettargetpack(self, name, size=50):
+        if name == "Storyteller":
+            address = "https://raw.githubusercontent.com/bra1n/townsquare/develop/src/assets/demon-head.png"
+            img = f'<img src = "{address}" height = "{size}" data-bs-toggle="tooltip" ' \
+               f'data-bs-placement="bottom" title="" data-bs-original-title="Storyteller">'
+            return f"<strong>Storyteller</strong> {img}"
+
         targetstate = self.targetstatedict[name]
         targimg = self.playerimagehtml(targetstate, size=size)
         return f"<strong>{name}</strong> {targimg}"
@@ -271,7 +301,7 @@ class Event:
 
     def roleabilityused(self, role, gamestate):
         roleplayer = [x for x in gamestate['playerdata'] if gamestate['playerdata'][x]['currentrole'] == role]
-        if len(roleplayer)>0:
+        if len(roleplayer) > 0:
             roleplayer = roleplayer[0]
             self.delta.append([roleplayer, "abilityused", True])
 
@@ -314,6 +344,12 @@ class Event:
             else:
                 self.processmissing()
 
+        elif self.eventname in ['Revolutionary Pair Information']:
+            if self.note in ['']:
+                self.HTML = f"{self.getplayerimg()} {self.getroleimg('Revolutionary')} {self.gettargetpack(self.targetlist[0])}"
+            else:
+                self.processmissing()
+
         elif self.eventname in ['Noble Information']:
             team = " ".join([self.gettargetpack(x) for x in self.targetlist])
             if self.note in ['']:
@@ -350,6 +386,9 @@ class Event:
         elif self.eventname in ['Bounty Hunter Information']:
             if self.note in ['']:
                 self.HTML = f"{self.getplayerimg()} learns {self.gettargetpack(self.targetlist[0])}"
+            elif self.note == 'Revolutionary':
+                pack = [self.gettargetpack(x) for x in self.targetlist[:2]]
+                self.HTML = f"{self.getplayerimg()} learns {self.gettargetpack(self.targetlist[0])} {self.getroleimg('Revolutionary')}"
             else:
                 self.processmissing()
 
@@ -377,6 +416,8 @@ class Event:
             if self.note == '':
                 bluffs = " ".join([self.getroleimg(x, size=40) for x in self.targetlist])
                 self.HTML = f"{self.getplayerimg()} learns the following are in play:<br>{bluffs}"
+            elif self.note == 'No outsiders':
+                self.HTML = f"{self.getplayerimg()} learns that no outsiders are in player"
             else:
                 self.processmissing()
 
@@ -402,7 +443,7 @@ class Event:
             else:
                 self.processmissing()
 
-        elif self.eventname in ['Grandmother Information','Ravenkeeper Information']:
+        elif self.eventname in ['Grandmother Information', 'Ravenkeeper Information']:
             if self.note == '':
                 self.HTML = f"{self.getplayerimg()} learns {self.gettargetpack(self.targetlist[0])} is " \
                             f"{self.getroleimg(self.targetlist[1])}"
@@ -439,6 +480,8 @@ class Event:
             elif 'Amnesiac Action - Select 1 character with response' in self.eventname:
                 self.HTML = f"{self.getplayerimg()} selects {self.getroleimg(self.targetlist[0])} " \
                             f"and learns {self.targetlist[1]}"
+            elif 'Amnesiac Action - Select 1 player' in self.eventname:
+                self.HTML = f"{self.getplayerimg()} selects {self.getroleimg(self.targetlist[0])}"
             else:
                 self.processmissing()
 
@@ -565,7 +608,8 @@ class Event:
 
         elif self.eventname in ['Witch Pick', 'Picks Master', 'Poisoner Pick', 'Snake Charmer Pick', 'Drinking Buddy',
                                 'DA Protection', 'Klutz Pick', 'Lunatic Pick', 'Exorcist Pick', 'Lycanthrope Pick',
-                                'Nightwatchman Pick', 'Huntsman Pick', 'Harlot Pick', 'Fiddler Choice']:
+                                'Nightwatchman Pick', 'Huntsman Pick', 'Harlot Pick', 'Fiddler Choice',
+                                'Fearmonger Pick','Professor Choice']:
             if self.note == '':
                 pack = " ".join([self.gettargetpack(x) for x in self.targetlist])
                 verb = {'Witch Pick': 'curses',
@@ -581,13 +625,15 @@ class Event:
                         'Nightwatchman Pick': 'reveals themselves to',
                         'Huntsman Pick': 'hopes their Damsel is',
                         'Fiddler Choice': 'fiddles the game and chooses to go against',
-                        'Harlot Pick': 'asks to see the role of'}
+                        'Harlot Pick': 'asks to see the role of',
+                        'Fearmonger Pick':'strikes fear into',
+                        'Professor Choice':'tries to revive'}
                 self.HTML = f"{self.getplayerimg()} {verb[self.eventname]} " \
                             f"{pack}"
             else:
                 self.processmissing()
 
-            if self.eventname in ['Nightwatchman Pick','Huntsman Pick']:
+            if self.eventname in ['Nightwatchman Pick', 'Huntsman Pick']:
                 self.playerabilityused()
 
         elif self.eventname in ['Harlot Choice']:
@@ -601,7 +647,7 @@ class Event:
                 self.HTML = f"{self.getplayerimg()} guesses {self.gettargetpack(self.targetlist[0])} as the Damsel"
             else:
                 self.processmissing()
-            self.roleabilityused("Damsel",gamestate)
+            self.roleabilityused("Damsel", gamestate)
 
         elif self.eventname in ['Courtier Pick']:
             if self.note == '':
@@ -757,6 +803,7 @@ class Event:
             if self.note == '':
                 self.HTML = f"{self.getplayerimg()} get their riot on with {self.gettargetpack(self.targetlist[0])}"
                 self.processdeath(self.player, [self.targetlist[0]], 'Riot Kill')
+                self.nomination = [self.player, self.targetlist[0], None]
             else:
                 self.processmissing()
 
@@ -870,12 +917,13 @@ class Event:
                             f"VotesReceived:<strong>{votesreceived}{deathmarker}</strong><br>"
 
                 button = f'<button type="button" class="btn btn-outline-info btn-sm" onclick="toggletable({vnum})" id="butv{vnum}"><strong>Vote {vnum}</strong></button>'
-                self.HTML+=button
+                self.HTML += button
 
                 pdata = gamestate['playerdata']
-                tablepack = [{'name':x['Player'],'voted':x['Voted'],'deadvoteused':x['Dead Vote Used'],
-                              'dead':not pdata[x['Player']]['alive'],
-                              "roleimg":pdata[x['Player']]['roleimg'], "role":pdata[x['Player']]['currentrole']} for x in voterpack]
+                tablepack = [{'name': x['Player'], 'voted': x['Voted'], 'deadvoteused': x['Dead Vote Used'],
+                              'dead': not pdata[x['Player']]['alive'],'active': pdata[x['Player']]['active'],
+                              "roleimg": pdata[x['Player']]['roleimg'], "role": pdata[x['Player']]['currentrole']} for x
+                             in voterpack]
 
                 self.voterpack = tablepack
 
@@ -883,7 +931,6 @@ class Event:
                 ghostvoteused = '/static/imgs/ghostvoteused.svg'
                 handraise = '/static/imgs/handraised.svg'
                 handlowered = '/static/imgs/handlowered.svg'
-
 
                 table = f'<table class="table" id="VoteTable{vnum}" style="display:none; table-layout: fixed ; width: 100%;"><thead><tr>'
 
@@ -919,7 +966,8 @@ class Event:
                 self.HTML += "<br>"
                 self.HTML += table
 
-                self.nomination = [self.player,self.targetlist[0],[livingvotes,deadvotes,votesreceived,votedetails['On the Block'] == 1]]
+                self.nomination = [self.player, self.targetlist[0],
+                                   [livingvotes, deadvotes, votesreceived, votedetails['On the Block'] == 1, voterpack]]
             elif self.note == 'No Vote':
                 self.HTML = f"{self.getplayerimg()} <img src = '{clockblock}' height = '30'> {targetplayerpack}"
                 if self.targetstatedict[self.targetlist[0]]['currentrole'] == "Virgin":
@@ -969,13 +1017,14 @@ class Event:
         elif self.eventname == 'Forms a Cult':
             if self.note != 'No Vote':
                 voteorder = gamestate['playerorder']
-                playerindex = voteorder.index(self.player)+1
-                voteorder = voteorder[playerindex:]+voteorder[:playerindex]
+                playerindex = voteorder.index(self.player) + 1
+                voteorder = voteorder[playerindex:] + voteorder[:playerindex]
                 playerdata = gamestate['playerdata']
                 voteorder = [x for x in voteorder if playerdata[x]["active"]]
-                alignmentdata  = [playerdata[x]["currentalignment"] for x in playerdata]
-                goodcount = len([x for x in alignmentdata if x=="Good"])
-                goodvotecount = len([x for x in range(len(alignmentdata)) if alignmentdata[x]=="Good" and self.targetlist[x]=="T"])
+                alignmentdata = [playerdata[x]["currentalignment"] for x in playerdata]
+                goodcount = len([x for x in alignmentdata if x == "Good"])
+                goodvotecount = len(
+                    [x for x in range(len(alignmentdata)) if alignmentdata[x] == "Good" and self.targetlist[x] == "T"])
                 vnum = "Cult"
 
                 self.HTML = f"{self.getplayerimg()} tries to form a cult (Votes:{goodvotecount}/{goodcount}).<br>"
@@ -989,7 +1038,7 @@ class Event:
                     t = voteorder[i]
                     atag = f'{playerdata[t]["roleimg"]}'
                     namerole = f"{playerdata[t]['name']}-{playerdata[t]['currentrole']}"
-                    hand = handraise if self.targetlist[i]=="T" else handlowered
+                    hand = handraise if self.targetlist[i] == "T" else handlowered
 
                     table += f'<div class="col-2"><img src = "{atag}" height = "40"' \
                              f'data-bs-toggle="tooltip" data-toggle="tooltip" ' \
@@ -1026,7 +1075,7 @@ class Event:
                 self.HTML = f"<img src = '{executejudge}' height = '60'> {self.getplayerimg()} was executed by" \
                             f"{self.playerimagehtml(judgepack)}"
                 self.processdeath(judge, [self.player], 'Judge Executed')
-                self.roleabilityused('Judge',gamestate)
+                self.roleabilityused('Judge', gamestate)
             elif self.note == "Scarlet Pass":
                 self.HTML = f"<img src = '{execute}' height = '60'> {self.getplayerimg()} was executed ({self.getroleimg('scarletwoman')}triggered)"
             elif self.note == "Mastermind":
@@ -1105,6 +1154,10 @@ class Event:
                 winner, method = "Good", "The Mayor Lives"
             elif self.note == 'Slayer Kill':
                 winner, method = "Good", "The Slayer got the Demon"
+            elif self.note == 'Storyteller Executed - Atheist':
+                winner, method = "Good", "Storyteller Executed - Atheist"
+            elif self.note == 'Evil Twin Executed':
+                winner, method = "Good", "Evil Twin Executed"
 
             elif self.note == 'Saint Executed':
                 winner, method = "Evil", "The Saint was Executed"
